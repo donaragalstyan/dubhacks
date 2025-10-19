@@ -81,14 +81,18 @@ if presentation_file:
                         with col1:
                             st.subheader("🎭 Tone Analysis")
                             tone = feedback.get('tone')
-                            if tone:
-                                st.metric("Overall Tone", tone.title())
-                                if tone == "POSITIVE":
+                            if isinstance(tone, str):
+                                st.metric("Overall Tone", tone.upper())
+                                if tone.upper() == "POSITIVE":
                                     st.success("🌟 Your tone is confident and engaging!")
-                                elif tone == "NEGATIVE":
+                                elif tone.upper() == "NEGATIVE":
                                     st.warning("💡 Consider using more positive language.")
-                                elif tone == "NEUTRAL":
-                                    st.info("📝 Your tone is balanced and professional.")
+                                elif tone.upper() == "NEUTRAL":
+                                    st.info("� Your tone is balanced and professional.")
+                                else:
+                                    st.info(f"Your tone is {tone}")
+                            else:
+                                st.warning("Tone analysis not available")
                             
                             st.markdown("---")
                             st.subheader("⏱️ Speech Metrics")
@@ -146,21 +150,65 @@ if exercise_file:
         with st.spinner("Uploading exercise recording..."):
             # First, upload the file
             files = {"file": (exercise_file.name, exercise_file, "audio/mpeg")}
+            st.write("Uploading file...")  # Debug log
             upload_response = requests.post("http://localhost:8000/api/upload-recording", files=files)
+            st.write(f"Upload response status: {upload_response.status_code}")  # Debug log
+            
             if upload_response.status_code == 200:
                 upload_data = upload_response.json()
+                st.write(f"Upload response data: {upload_data}")  # Debug log
                 recording_url = upload_data.get("recordingUrl")
+                st.write(f"Recording URL: {recording_url}")  # Debug log
                 
                 # Then, analyze the exercise
                 with st.spinner(f"Analyzing your {focus_area} exercise..."):
+                    # Define constraints based on focus area
+                    constraints = {}
+                    if focus_area == "pace":
+                        constraints = {
+                            "pace_range": {"min": 120, "max": 150}
+                        }
+                    elif focus_area == "fillers":
+                        constraints = {
+                            "max_fillers": 3
+                        }
+                    elif focus_area == "clarity":
+                        constraints = {
+                            "min_clarity_score": 70
+                        }
+                    elif focus_area == "confidence":
+                        constraints = {
+                            "min_confidence_score": 70
+                        }
+                    elif focus_area == "tone":
+                        constraints = {
+                            "required_tones": ["POSITIVE", "PROFESSIONAL"]
+                        }
+
                     analysis_payload = {
                         "recording_url": recording_url,
-                        "focus_area": focus_area
+                        "focus_area": focus_area,
+                        "constraints": constraints
                     }
-                    analysis_response = requests.post(
-                        "http://localhost:8000/api/analyze-exercise",
-                        json=analysis_payload
-                    )
+                    st.write(f"Analysis payload: {analysis_payload}")  # Debug log
+                    st.write("Note: Sending request with properly formatted data...")  # Debug log
+                    
+                    if not recording_url:
+                        st.error("No recording URL available")
+                        st.stop()
+
+                    try:
+                        st.write("Sending analysis request...")  # Debug log
+                        analysis_response = requests.post(
+                            "http://localhost:8000/api/analyze-exercise",
+                            json=analysis_payload,
+                            headers={"Content-Type": "application/json"}
+                        )
+                        st.write(f"Analysis response status: {analysis_response.status_code}")  # Debug log
+                        st.write(f"Analysis response text: {analysis_response.text}")  # Debug log
+                    except Exception as e:
+                        st.error(f"Analysis request failed: {str(e)}")
+                        st.stop()
                     
                     if analysis_response.status_code == 200:
                         data = analysis_response.json()
@@ -221,11 +269,17 @@ if exercise_file:
                                 for emotion, score in tone_data.get("raw", {}).items():
                                     st.progress(score, text=f"{emotion}: {score*100:.1f}%")
                         
-                        # Show exercise-specific suggestions
-                        if feedback.get("suggested_exercises"):
-                            st.subheader("🎯 Suggested Improvements")
-                            for exercise in feedback["suggested_exercises"]:
-                                st.info(f"💡 {exercise.get('suggestion', '')}")
+                        # Show constraint results and suggestions
+                        constraint_result = feedback.get("constraint_result", {})
+                        if constraint_result:
+                            st.subheader("🎯 Exercise Results")
+                            if constraint_result.get("respected", False):
+                                st.success("✨ Great job! You met all the exercise requirements!")
+                            else:
+                                st.warning("Some areas need improvement:")
+                                violations = constraint_result.get("violations", [])
+                                for violation in violations:
+                                    st.info(f"💡 {violation.get('suggestion', '')}")
                         
                         # Show transcript
                         st.subheader("📝 Exercise Transcript")

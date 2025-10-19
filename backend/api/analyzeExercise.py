@@ -95,7 +95,24 @@ def check_constraints(transcript: str, metrics: Dict[str, Any], constraints: Dic
 
 def lambda_handler(event, context):
     try:
-        body = json.loads(event.get("body", "{}"))
+        # Get the body, handling both string and dict cases
+        body = event.get("body", {})
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except json.JSONDecodeError:
+                return {
+                    "statusCode": 400,
+                    "body": json.dumps({"message": "Invalid JSON in request body"})
+                }
+        
+        # Extract recording URL and constraints with proper error handling
+        if not isinstance(body, dict):
+            return {
+                "statusCode": 400,
+                "body": json.dumps({"message": "Request body must be an object"})
+            }
+            
         recording_url = body.get("recordingUrl")
         constraints = body.get("constraints", {})
 

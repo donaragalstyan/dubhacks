@@ -8,6 +8,7 @@ import base64
 from datetime import datetime
 from .uploadRecording import lambda_handler as upload_recording_handler
 from .analyzePresentation import lambda_handler as analyze_presentation_handler
+from .analyzeExercise import lambda_handler as analyze_exercise_handler
 
 app = FastAPI(
     title="Speech Analysis API",
@@ -167,6 +168,35 @@ async def analyze_presentation(recording_url: str = Body(..., embed=True)) -> Di
             raise HTTPException(status_code=result["statusCode"], detail=json.loads(result["body"]))
         
         # Return exactly the same format as before
+        return json.loads(result["body"])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+from pydantic import BaseModel
+
+class ExerciseRequest(BaseModel):
+    recording_url: str
+    focus_area: str
+    constraints: Dict[str, Any] = {}
+
+@app.post("/api/analyze-exercise")
+async def analyze_exercise(request: ExerciseRequest) -> Dict[str, Any]:
+    try:
+        # Pass data directly without JSON encoding
+        event = {
+            "body": {
+                "recordingUrl": request.recording_url,
+                "constraints": request.constraints
+            }
+        }
+        print(f"Event data: {event}")  # Debug log
+        
+        # Call Lambda handler
+        result = analyze_exercise_handler(event, None)
+        
+        if result["statusCode"] != 200:
+            raise HTTPException(status_code=result["statusCode"], detail=json.loads(result["body"]))
+        
         return json.loads(result["body"])
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
