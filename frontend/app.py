@@ -1,300 +1,279 @@
-# streamlit_app.py
 import streamlit as st
 import requests
 import json
 
 st.set_page_config(page_title="Stage Buddy", layout="centered")
 
-st.title("Magic Mirror")
+# --- GLOBAL STYLING ---
+st.markdown("""
+    <style>
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+        max-width: 750px;
+        margin: auto;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-# Create tabs for different functionalities
+st.title("✨ Magic Mirror")
+
+# --- HEALTH CHECK ---
+try:
+    health_response = requests.get("http://localhost:8000/api/health", timeout=3)
+    if health_response.status_code == 200:
+        st.sidebar.success("Backend API: Connected")
+    else:
+        st.sidebar.warning("Backend API: Unstable")
+except requests.exceptions.RequestException:
+    st.sidebar.error("Backend API: Disconnected")
+
+# --- TABS ---
 presentation_tab, exercise_tab = st.tabs(["🎯 Presentation Analysis", "💪 Exercise Practice"])
 
+# --------------------------------------------------------------------
+# 🎯 PRESENTATION TAB
+# --------------------------------------------------------------------
 with presentation_tab:
-    # --- Upload Presentation ---
-    st.header("Upload Presentation")
-    presentation_file = st.file_uploader("Choose your presentation audio", type=["mp3", "wav", "m4a"], key="presentation_upload")
+    st.header("🎤 Presentation Analysis")
+    st.caption("Upload your presentation recording to get AI-driven feedback on tone, pace, and filler words.")
 
+    presentation_file = st.file_uploader("🎧 Upload Presentation Audio", type=["mp3", "wav", "m4a"])
+
+    if presentation_file and st.button("Analyze Presentation", use_container_width=True):
+        with st.spinner("Uploading your presentation..."):
+            files = {"file": (presentation_file.name, presentation_file, "audio/mpeg")}
+            upload_response = requests.post("http://localhost:8000/api/upload-recording", files=files)
+
+        if upload_response.status_code == 200:
+            upload_data = upload_response.json()
+            recording_url = upload_data.get("recordingUrl")
+
+            st.info("🔍 Analyzing presentation... please wait.")
+            analysis_payload = {"recording_url": recording_url}
+            analysis_response = requests.post(
+                "http://localhost:8000/api/analyze-presentation",
+                json=analysis_payload
+            )
+
+            if analysis_response.status_code == 200:
+                response_data = analysis_response.json()
+                if isinstance(response_data.get("body"), str):
+                    data = json.loads(response_data["body"])
+                else:
+                    data = response_data
+
+                feedback = data.get("feedback", {})
+                st.success("✅ Presentation analysis complete!")
+
+                # --- FEEDBACK SECTIONS ---
+                st.divider()
+                st.subheader("📊 Analysis Results")
+
+                col1, col2 = st.columns(2)
+
+                # 🎭 Tone
+                with col1:
+                    tone = feedback.get("tone")
+                    if tone:
+                        st.metric("Overall Tone", tone.upper())
+                        if tone.lower() == "positive":
+                            st.success("🌟 Confident and engaging!")
+                        elif tone.lower() == "neutral":
+                            st.info("Balanced and professional.")
+                        elif tone.lower() == "negative":
+                            st.warning("💡 Try using more positive language.")
+                    else:
+                        st.warning("Tone analysis unavailable.")
+
+                    st.markdown("---")
+                    pace = feedback.get("pace_wpm")
+                    if pace:
+                        st.metric("Speaking Pace", f"{pace:.1f} WPM")
+                        if 120 <= pace <= 150:
+                            st.success("✨ Perfect pace range (120–150 WPM).")
+                        elif pace < 120:
+                            st.warning("💡 Try speaking a little faster.")
+                        else:
+                            st.warning("💡 Try slowing down slightly for clarity.")
+
+                # 🗣️ Fillers
+                with col2:
+                    fillers = feedback.get("filler_words")
+                    if fillers is not None:
+                        st.metric("Filler Words", fillers)
+                        if fillers == 0:
+                            st.success("🌟 No filler words detected!")
+                        else:
+                            st.warning(f"💡 {fillers} filler words found.")
+                            st.info("Common fillers: 'um', 'uh', 'like', 'you know'")
+                    else:
+                        st.info("Filler analysis not available.")
+
+                # 🎯 Suggestions
+                st.divider()
+                st.subheader("🎯 Improvement Suggestions")
+                exercises = feedback.get("suggested_exercises", [])
+                if exercises:
+                    for ex in exercises:
+                        suggestion = ex if isinstance(ex, str) else ex.get("suggestion", "")
+                        st.info(f"💡 {suggestion}")
+                else:
+                    st.info("No improvement suggestions provided.")
+
+                # 📝 Transcript
+                st.divider()
+                transcript = feedback.get("transcript")
+                st.subheader("📝 Transcript")
+                if transcript:
+                    st.text_area("Your Presentation Text", transcript, height=150)
+                else:
+                    st.warning("Transcript not available.")
+            else:
+                st.error("❌ Presentation analysis failed.")
+        else:
+            st.error("❌ File upload failed.")
+
+    if presentation_file:
+        st.subheader("🎧 Review Your Recording")
+        st.audio(presentation_file)
+
+# --------------------------------------------------------------------
+# 💪 EXERCISE TAB
+# --------------------------------------------------------------------
 with exercise_tab:
-    # --- Upload Exercise ---
-    st.header("Practice Exercise")
-    # Select focus area
+    st.header("💪 Exercise Practice")
+    st.caption("Select a focus area and upload a short clip to practice specific speaking skills.")
+
     focus_area = st.selectbox(
-        "What would you like to focus on?",
+        "🎯 Choose a Focus Area",
         ["pace", "fillers", "clarity", "confidence", "tone"],
         format_func=lambda x: {
             "pace": "🏃‍♂️ Speaking Pace",
             "fillers": "🗣️ Filler Words",
-            "clarity": "📝 Speech Clarity",
+            "clarity": "📝 Clarity",
             "confidence": "💪 Confidence",
             "tone": "🎭 Tone"
-        }[x]
+        }[x],
     )
-    
-    # Help text based on selected focus
+
     focus_help = {
-        "pace": "Practice maintaining a steady speaking rate between 120-150 words per minute.",
-        "fillers": "Work on reducing filler words like 'um', 'uh', 'like', and 'you know'.",
-        "clarity": "Focus on clear pronunciation and well-structured sentences.",
-        "confidence": "Practice speaking with authority and conviction.",
-        "tone": "Work on maintaining appropriate emotional tone for your content."
+        "pace": "Maintain a speaking rate between 120–150 words per minute.",
+        "fillers": "Reduce 'um', 'uh', and similar filler words.",
+        "clarity": "Focus on clear articulation and structure.",
+        "confidence": "Speak with steady tone and conviction.",
+        "tone": "Maintain emotionally appropriate tone for your message."
     }
     st.info(focus_help[focus_area])
-    
-    # File upload for exercise
-    exercise_file = st.file_uploader("Choose your exercise audio", type=["mp3", "wav", "m4a"], key="exercise_upload")
 
-if presentation_file:
-    if st.button("Submit Presentation"):
-        with st.spinner("Uploading..."):
-            # First, upload the file
-            files = {"file": (presentation_file.name, presentation_file, "audio/mpeg")}
-            upload_response = requests.post("http://localhost:8000/api/upload-recording", files=files)
-            if upload_response.status_code == 200:
-                upload_data = upload_response.json()
-                recording_url = upload_data.get("recordingUrl")
-                
-                # Then, analyze the recording
-                with st.spinner("Analyzing..."):
-                    analysis_payload = {"recording_url": recording_url}
-                    analysis_response = requests.post(
-                        "http://localhost:8000/api/analyze-presentation",
-                        json=analysis_payload
-                    )
-                    
-                    if analysis_response.status_code == 200:
-                        response_data = analysis_response.json()
-                        if isinstance(response_data.get('body'), str):
-                            data = json.loads(response_data['body'])
-                        else:
-                            data = response_data
-                            
-                        feedback = data.get("feedback", {})
-                        
-                        st.success("Analysis complete!")
-                        
-                        st.header("📊 Analysis Results")
-                        
-                        # Create columns for the metrics
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.subheader("🎭 Tone Analysis")
-                            tone = feedback.get('tone')
-                            if isinstance(tone, str):
-                                st.metric("Overall Tone", tone.upper())
-                                if tone.upper() == "POSITIVE":
-                                    st.success("🌟 Your tone is confident and engaging!")
-                                elif tone.upper() == "NEGATIVE":
-                                    st.warning("💡 Consider using more positive language.")
-                                elif tone.upper() == "NEUTRAL":
-                                    st.info("� Your tone is balanced and professional.")
-                                else:
-                                    st.info(f"Your tone is {tone}")
-                            else:
-                                st.warning("Tone analysis not available")
-                            
-                            st.markdown("---")
-                            st.subheader("⏱️ Speech Metrics")
-                            pace = feedback.get('pace_wpm')
-                            if pace:
-                                st.metric("Speaking Pace", f"{pace:.1f} WPM")
-                                if 120 <= pace <= 150:
-                                    st.success("✨ Great pace! You're in the ideal range.")
-                                elif pace < 120:
-                                    st.warning("💡 Consider speaking a bit faster for better engagement.")
-                                else:
-                                    st.warning("💡 Try slowing down slightly for better clarity.")
-                        
-                        with col2:
-                            st.subheader("🗣️ Filler Words")
-                            filler_count = feedback.get('filler_words')
-                            if isinstance(filler_count, int):
-                                st.metric("Total Filler Words", filler_count)
-                                if filler_count == 0:
-                                    st.success("🌟 Excellent! No filler words detected.")
-                                else:
-                                    st.warning(f"💡 Detected {filler_count} filler words in your speech.")
-                                    st.info("Common filler words to watch for: 'um', 'uh', 'like', 'you know'")
-                        
-                        # Exercises Section
-                        st.header("🎯 Improvement Suggestions")
-                        exercises = feedback.get('suggested_exercises', [])
-                        if exercises:
-                            for exercise in exercises:
-                                if isinstance(exercise, str):
-                                    st.info(f"💡 {exercise}")
-                                else:
-                                    st.info(f"💡 {exercise.get('suggestion', '')}")
-                        
-                        # Transcript Section
-                        st.header("📝 Transcript")
-                        transcript = feedback.get('transcript')
-                        if transcript:
-                            st.text_area("Speech Content", transcript, height=150)
-                        else:
-                            st.warning("No transcript available")
-                    else:
-                        st.error(f"Analysis failed: {analysis_response.text}")
-            else:
-                st.error(f"Upload failed: {upload_response.text}")
+    exercise_file = st.file_uploader("🎧 Upload Exercise Audio", type=["mp3", "wav", "m4a"])
 
-# --- Audio Playback for Presentation ---
-if presentation_file:
-    st.subheader("Review Your Recording:")
-    st.audio(presentation_file)
-
-# --- Exercise Analysis and Audio Playback ---
-if exercise_file:
-    if st.button("Start Exercise Analysis", key="exercise_button"):
+    if exercise_file and st.button("Start Exercise Analysis", use_container_width=True):
         with st.spinner("Uploading exercise recording..."):
-            # First, upload the file
             files = {"file": (exercise_file.name, exercise_file, "audio/mpeg")}
             upload_response = requests.post("http://localhost:8000/api/upload-recording", files=files)
-            
-            if upload_response.status_code == 200:
-                upload_data = upload_response.json()
-                recording_url = upload_data.get("recordingUrl")
-                
-                # Then, analyze the exercise
-                with st.spinner(f"Analyzing your {focus_area} exercise..."):
-                    # Define constraints based on focus area
-                    constraints = {}
-                    if focus_area == "pace":
-                        constraints = {
-                            "pace_range": {"min": 120, "max": 150}
-                        }
-                    elif focus_area == "fillers":
-                        constraints = {
-                            "max_fillers": 3
-                        }
-                    elif focus_area == "clarity":
-                        constraints = {
-                            "min_clarity_score": 70
-                        }
-                    elif focus_area == "confidence":
-                        constraints = {
-                            "min_confidence_score": 70
-                        }
-                    elif focus_area == "tone":
-                        constraints = {
-                            "required_tones": ["POSITIVE", "PROFESSIONAL"]
-                        }
 
-                    analysis_payload = {
-                        "recording_url": recording_url,
-                        "focus_area": focus_area,
-                        "constraints": constraints
-                    }
-               
-                    
-                    if not recording_url:
-                        st.error("No recording URL available")
-                        st.stop()
+        if upload_response.status_code == 200:
+            upload_data = upload_response.json()
+            recording_url = upload_data.get("recordingUrl")
 
-                    try:
-                        analysis_response = requests.post(
-                            "http://localhost:8000/api/analyze-exercise",
-                            json=analysis_payload,
-                            headers={"Content-Type": "application/json"}
-                        )
-                       
-                    except Exception as e:
-                        st.error(f"Analysis request failed: {str(e)}")
-                        st.stop()
-                    
-                    if analysis_response.status_code == 200:
-                        data = analysis_response.json()
-                        feedback = data.get("feedback", {})
-                        
-                        st.success("Exercise analysis complete!")
-                        
-                        # Display focused feedback based on exercise type
-                        st.header("🎯 Exercise Feedback")
-                        
-                        if focus_area == "pace":
-                            pace = feedback.get("pace_wpm")
-                            if pace:
-                                st.metric("Your Speaking Pace", f"{pace:.1f} WPM")
-                                if 120 <= pace <= 150:
-                                    st.success("🌟 Perfect pace! Keep it up!")
-                                elif pace < 120:
-                                    st.warning("💡 Try speaking a bit faster. Aim for 120-150 WPM.")
-                                else:
-                                    st.warning("💡 Try slowing down a bit. Aim for 120-150 WPM.")
-                        
-                        elif focus_area == "fillers":
-                            filler_count = feedback.get("filler_words", {}).get("total", 0)
-                            st.metric("Filler Words Used", filler_count)
-                            if filler_count == 0:
-                                st.success("🌟 Excellent! No filler words detected.")
-                            else:
-                                st.warning(f"Found {filler_count} filler words. Keep practicing!")
-                                filler_details = feedback.get("filler_words", {}).get("per_filler", {})
-                                for word, count in filler_details.items():
-                                    if count > 0:
-                                        st.write(f"- '{word}': {count} times")
-                        
-                        elif focus_area == "clarity":
-                            clarity_score = feedback.get("clarity", {}).get("score", 0)
-                            st.metric("Clarity Score", f"{clarity_score}/100")
-                            if clarity_score >= 90:
-                                st.success("🌟 Excellent clarity!")
-                            elif clarity_score >= 70:
-                                st.info("💡 Good clarity. Keep practicing!")
-                            else:
-                                st.warning("💡 Focus on speaking more clearly.")
-                        
-                        elif focus_area == "confidence":
-                            confidence_score = feedback.get("confidence", {}).get("score", 0)
-                            st.metric("Confidence Score", f"{confidence_score}/100")
-                            if confidence_score >= 90:
-                                st.success("🌟 Very confident delivery!")
-                            else:
-                                st.info("💡 Try speaking with more authority.")
-                        
-                        elif focus_area == "tone":
-                            tone_data = feedback.get("tone", {})
-                            if tone_data:
-                                dominant_tone = max(tone_data.get("raw", {}).items(), key=lambda x: x[1])[0]
-                                st.metric("Primary Tone", dominant_tone.title())
-                                st.write("Emotional Distribution:")
-                                for emotion, score in tone_data.get("raw", {}).items():
-                                    st.progress(score, text=f"{emotion}: {score*100:.1f}%")
-                        
-                        # Show constraint results and suggestions
-                        constraint_result = feedback.get("constraint_result", {})
-                        if constraint_result:
-                            st.subheader("🎯 Exercise Results")
-                            if constraint_result.get("respected", False):
-                                st.success("✨ Great job! You met all the exercise requirements!")
-                            else:
-                                st.warning("Some areas need improvement:")
-                                violations = constraint_result.get("violations", [])
-                                for violation in violations:
-                                    st.info(f"💡 {violation.get('suggestion', '')}")
-                        
-                        # Show transcript
-                        st.subheader("📝 Exercise Transcript")
-                        transcript = feedback.get("transcript")
-                        if transcript:
-                            st.text_area("What you said", transcript, height=100)
+            constraints = {}
+            if focus_area == "pace":
+                constraints = {"pace_range": {"min": 120, "max": 150}}
+            elif focus_area == "fillers":
+                constraints = {"max_fillers": 3}
+            elif focus_area == "clarity":
+                constraints = {"min_clarity_score": 70}
+            elif focus_area == "confidence":
+                constraints = {"min_confidence_score": 70}
+            elif focus_area == "tone":
+                constraints = {"required_tones": ["POSITIVE", "PROFESSIONAL"]}
+
+            with st.spinner("Analyzing your exercise..."):
+                analysis_payload = {
+                    "recording_url": recording_url,
+                    "focus_area": focus_area,
+                    "constraints": constraints
+                }
+                analysis_response = requests.post(
+                    "http://localhost:8000/api/analyze-exercise",
+                    json=analysis_payload,
+                    headers={"Content-Type": "application/json"}
+                )
+
+            if analysis_response.status_code == 200:
+                data = analysis_response.json()
+                feedback = data.get("feedback", {})
+
+                st.success("✅ Exercise analysis complete!")
+                st.divider()
+                st.subheader("📈 Exercise Feedback")
+
+                # --- Focus-specific feedback ---
+                if focus_area == "pace":
+                    pace = feedback.get("pace_wpm")
+                    if pace:
+                        st.metric("Your Pace", f"{pace:.1f} WPM")
+                        if 120 <= pace <= 150:
+                            st.success("🌟 Great pace! Perfect range.")
+                        elif pace < 120:
+                            st.warning("💡 Speak a little faster.")
                         else:
-                            st.warning("No transcript available")
-                    else:
-                        st.error(f"Analysis failed: {analysis_response.text}")
-            else:
-                st.error(f"Upload failed: {upload_response.text}")
-    
-    st.subheader("Review Your Exercise:")
-    st.audio(exercise_file)
+                            st.warning("💡 Try slowing down slightly.")
 
-# Add a health check indicator
-try:
-    health_response = requests.get("http://localhost:8000/api/health")
-    if health_response.status_code == 200:
-        st.sidebar.success("Backend API: Connected")
-    else:
-        st.sidebar.error("Backend API: Disconnected")
-except requests.exceptions.ConnectionError:
-    st.sidebar.error("Backend API: Disconnected")
+                elif focus_area == "fillers":
+                    filler_data = feedback.get("filler_words", {})
+                    total = filler_data.get("total", 0)
+                    st.metric("Filler Words Used", total)
+                    if total == 0:
+                        st.success("🌟 Excellent! No filler words detected.")
+                    else:
+                        st.warning(f"💡 {total} filler words detected.")
+                        for word, count in filler_data.get("per_filler", {}).items():
+                            st.write(f"- '{word}': {count} times")
+
+                elif focus_area == "clarity":
+                    clarity = feedback.get("clarity", {}).get("score", 0)
+                    st.metric("Clarity Score", f"{clarity}/100")
+
+                elif focus_area == "confidence":
+                    confidence = feedback.get("confidence", {}).get("score", 0)
+                    st.metric("Confidence Score", f"{confidence}/100")
+
+                elif focus_area == "tone":
+                    tone_data = feedback.get("tone", {})
+                    if tone_data:
+                        dominant_tone = max(tone_data.get("raw", {}).items(), key=lambda x: x[1])[0]
+                        st.metric("Primary Tone", dominant_tone.title())
+                        st.write("Tone Distribution:")
+                        for emotion, score in tone_data.get("raw", {}).items():
+                            st.progress(score, text=f"{emotion}: {score * 100:.1f}%")
+
+                # --- Constraint results ---
+                st.divider()
+                constraint_result = feedback.get("constraint_result", {})
+                if constraint_result:
+                    st.subheader("🎯 Exercise Results")
+                    if constraint_result.get("respected", False):
+                        st.success("✨ You met all exercise goals!")
+                    else:
+                        st.warning("Some areas need improvement:")
+                        for violation in constraint_result.get("violations", []):
+                            st.info(f"💡 {violation.get('suggestion', '')}")
+
+                # --- Transcript ---
+                st.divider()
+                transcript = feedback.get("transcript")
+                st.subheader("📝 Exercise Transcript")
+                if transcript:
+                    st.text_area("Your Speech", transcript, height=120)
+                else:
+                    st.info("No transcript available.")
+            else:
+                st.error(f"❌ Analysis failed: {analysis_response.text}")
+        else:
+            st.error(f"❌ Upload failed: {upload_response.text}")
+
+    if exercise_file:
+        st.subheader("🎧 Review Your Exercise")
+        st.audio(exercise_file)
