@@ -1,4 +1,3 @@
-# streamlit_app.py
 import streamlit as st
 import requests
 import json
@@ -185,12 +184,15 @@ if exercise_file:
                             "required_tones": ["POSITIVE", "PROFESSIONAL"]
                         }
 
+                    # Format the request payload
                     analysis_payload = {
                         "recording_url": recording_url,
-                        "focus_area": focus_area,
+                        "focus_area": focus_area,  # This comes from the selectbox above
                         "constraints": constraints
                     }
-                    st.write(f"Analysis payload: {analysis_payload}")  # Debug log
+                    st.write("Prepared analysis request:")
+                    st.write(f"Focus area: {focus_area}")
+                    st.write(f"Full payload: {analysis_payload}")  # Debug log
                     st.write("Note: Sending request with properly formatted data...")  # Debug log
                     
                     if not recording_url:
@@ -213,81 +215,91 @@ if exercise_file:
                     if analysis_response.status_code == 200:
                         data = analysis_response.json()
                         feedback = data.get("feedback", {})
+                        analysis = feedback.get("analysis", {})
                         
                         st.success("Exercise analysis complete!")
                         
-                        # Display focused feedback based on exercise type
-                        st.header("🎯 Exercise Feedback")
+                        # Main header for exercise results
+                        st.header("🎯 Exercise Results")
                         
-                        if focus_area == "pace":
-                            pace = feedback.get("pace_wpm")
-                            if pace:
-                                st.metric("Your Speaking Pace", f"{pace:.1f} WPM")
-                                if 120 <= pace <= 150:
-                                    st.success("🌟 Perfect pace! Keep it up!")
-                                elif pace < 120:
-                                    st.warning("💡 Try speaking a bit faster. Aim for 120-150 WPM.")
-                                else:
-                                    st.warning("💡 Try slowing down a bit. Aim for 120-150 WPM.")
+                        # Display basic metrics in columns
+                        col1, col2 = st.columns(2)
                         
-                        elif focus_area == "fillers":
-                            filler_count = feedback.get("filler_words", {}).get("total", 0)
-                            st.metric("Filler Words Used", filler_count)
-                            if filler_count == 0:
-                                st.success("🌟 Excellent! No filler words detected.")
+                        with col1:
+                            st.subheader("📊 Performance Metrics")
+                            word_count = feedback.get("word_count", 0)
+                            duration = feedback.get("duration_seconds", 0)
+                            st.metric("Words Spoken", word_count)
+                            st.metric("Duration", f"{duration:.1f}s")
+                        
+                        with col2:
+                            st.subheader("� Target Status")
+                            analysis = feedback.get("analysis", {})
+                            status = analysis.get("status", "unknown")
+                            
+                            if status == "on_target":
+                                st.success("✨ Target Achieved!")
+                            elif status == "needs_work":
+                                st.warning("� Keep Practicing")
+                            
+                            # Display metrics based on focus area
+                            if focus_area == "pace":
+                                pace = analysis.get("pace_wpm")
+                                target_range = analysis.get("target_range", "120-150 WPM")
+                                st.metric("Speaking Pace", f"{pace:.1f} WPM")
+                                st.info(f"Target Range: {target_range}")
+                            
+                            elif focus_area == "fillers":
+                                filler_count = analysis.get("filler_count", 0)
+                                target_max = analysis.get("target_max", 3)
+                                st.metric("Filler Words", filler_count)
+                                st.info(f"Target: Maximum {target_max} filler words")
+                                
+                                # Show filler word breakdown if any found
+                                per_filler = analysis.get("per_filler", {})
+                                if per_filler:
+                                    with st.expander("See filler word details"):
+                                        for word, count in per_filler.items():
+                                            st.text(f"'{word}': {count} times")
+                            
+                            elif focus_area == "clarity":
+                                clarity_score = analysis.get("clarity_score", 0)
+                                target_min = analysis.get("target_min", 70)
+                                st.metric("Clarity Score", f"{clarity_score}/100")
+                                st.info(f"Target: Minimum score of {target_min}")
+                            
+                            elif focus_area == "confidence":
+                                confidence_score = analysis.get("confidence_score", 0)
+                                target_min = analysis.get("target_min", 70)
+                                st.metric("Confidence Score", f"{confidence_score}/100")
+                                st.info(f"Target: Minimum score of {target_min}")
+                            
+                            elif focus_area == "tone":
+                                tone = analysis.get("tone_classification", "NEUTRAL")
+                                target_tones = analysis.get("target_tones", ["POSITIVE"])
+                                st.metric("Primary Tone", tone.title())
+                                st.info(f"Target: {', '.join(t.title() for t in target_tones)}")
+                                
+                                # Show tone breakdown
+                                tone_scores = analysis.get("tone_scores", {})
+                                if tone_scores:
+                                    with st.expander("See tone breakdown"):
+                                        for tone, score in tone_scores.items():
+                                            st.progress(score, text=f"{tone.title()}: {score*100:.1f}%")
+
+                        # Display feedback and suggestions
+                        st.subheader("💡 Feedback")
+                        feedback_messages = analysis.get("feedback", [])
+                        for message in feedback_messages:
+                            if "great" in message.lower() or "excellent" in message.lower():
+                                st.success(message)
                             else:
-                                st.warning(f"Found {filler_count} filler words. Keep practicing!")
-                                filler_details = feedback.get("filler_words", {}).get("per_filler", {})
-                                for word, count in filler_details.items():
-                                    if count > 0:
-                                        st.write(f"- '{word}': {count} times")
-                        
-                        elif focus_area == "clarity":
-                            clarity_score = feedback.get("clarity", {}).get("score", 0)
-                            st.metric("Clarity Score", f"{clarity_score}/100")
-                            if clarity_score >= 90:
-                                st.success("🌟 Excellent clarity!")
-                            elif clarity_score >= 70:
-                                st.info("💡 Good clarity. Keep practicing!")
-                            else:
-                                st.warning("💡 Focus on speaking more clearly.")
-                        
-                        elif focus_area == "confidence":
-                            confidence_score = feedback.get("confidence", {}).get("score", 0)
-                            st.metric("Confidence Score", f"{confidence_score}/100")
-                            if confidence_score >= 90:
-                                st.success("🌟 Very confident delivery!")
-                            else:
-                                st.info("💡 Try speaking with more authority.")
-                        
-                        elif focus_area == "tone":
-                            tone_data = feedback.get("tone", {})
-                            if tone_data:
-                                dominant_tone = max(tone_data.get("raw", {}).items(), key=lambda x: x[1])[0]
-                                st.metric("Primary Tone", dominant_tone.title())
-                                st.write("Emotional Distribution:")
-                                for emotion, score in tone_data.get("raw", {}).items():
-                                    st.progress(score, text=f"{emotion}: {score*100:.1f}%")
-                        
-                        # Show constraint results and suggestions
-                        constraint_result = feedback.get("constraint_result", {})
-                        if constraint_result:
-                            st.subheader("🎯 Exercise Results")
-                            if constraint_result.get("respected", False):
-                                st.success("✨ Great job! You met all the exercise requirements!")
-                            else:
-                                st.warning("Some areas need improvement:")
-                                violations = constraint_result.get("violations", [])
-                                for violation in violations:
-                                    st.info(f"💡 {violation.get('suggestion', '')}")
-                        
+                                st.info(message)
+                                
                         # Show transcript
-                        st.subheader("📝 Exercise Transcript")
-                        transcript = feedback.get("transcript")
-                        if transcript:
-                            st.text_area("What you said", transcript, height=100)
-                        else:
-                            st.warning("No transcript available")
+                        st.subheader("📝 Transcript")
+                        transcript = feedback.get("transcript", "No transcript available")
+                        st.text_area("Your Speech", transcript, height=100, disabled=True)
                     else:
                         st.error(f"Analysis failed: {analysis_response.text}")
             else:

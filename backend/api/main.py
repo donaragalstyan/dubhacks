@@ -172,24 +172,54 @@ async def analyze_presentation(recording_url: str = Body(..., embed=True)) -> Di
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-from pydantic import BaseModel
+from fastapi import Body
+from pydantic import BaseModel, Field
+from typing import Optional
 
 class ExerciseRequest(BaseModel):
     recording_url: str
-    focus_area: str
+    focus_area: str = Field(..., description="One of: pace, fillers, clarity, confidence, tone")
     constraints: Dict[str, Any] = {}
 
 @app.post("/api/analyze-exercise")
 async def analyze_exercise(request: ExerciseRequest) -> Dict[str, Any]:
     try:
-        # Pass data directly without JSON encoding
+        # Create event object with the properly structured data
+        print(f"Received request: {request}")  # Debug log
+        
+        # Structure the event as expected by the lambda handler
         event = {
             "body": {
                 "recordingUrl": request.recording_url,
+                "focus_area": request.focus_area,
                 "constraints": request.constraints
             }
         }
-        print(f"Event data: {event}")  # Debug log
+        print(f"Prepared event: {event}")  # Debug log
+        
+        # Call lambda handler with properly structured event
+        # Ensure focus area is one of the valid options
+        if request.focus_area not in ["pace", "fillers", "clarity", "confidence", "tone"]:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Invalid focus area",
+                    "valid_focus_areas": ["pace", "fillers", "clarity", "confidence", "tone"]
+                }
+            )
+
+        result = analyze_exercise_handler(event, None)
+        
+        # Check if the lambda handler returned an error
+        if result["statusCode"] != 200:
+            error_body = json.loads(result["body"]) if isinstance(result.get("body"), str) else result.get("body", {})
+            raise HTTPException(
+                status_code=result["statusCode"],
+                detail=error_body
+            )
+            
+        # Parse and return the successful response
+        response_body = json.loads(result["body"]) if isinstance(result.get("body"), str) else result.get("body", {})
         
         # Call Lambda handler
         result = analyze_exercise_handler(event, None)

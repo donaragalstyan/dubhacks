@@ -152,12 +152,39 @@ def find_filler_examples(text: str, filler_counts: Dict[str, int]) -> List[Dict[
 
 # Helper functions
 def download_transcript(transcript_url):
+    """Download and parse AWS Transcribe results.
+    
+    Returns:
+        dict: Contains transcript text and duration from the audio file
+    """
     response = requests.get(transcript_url)
     data = response.json()
     try:
         if not data.get("results") or not data["results"].get("transcripts") or not data["results"]["transcripts"]:
             raise ValueError("No transcript data found in response")
-        return data["results"]["transcripts"][0]["transcript"]
+        
+        transcript = data["results"]["transcripts"][0]["transcript"]
+        
+        # Get duration from the last audio segment's end time
+        audio_segments = data["results"].get("audio_segments", [])
+        if audio_segments:
+            duration = float(audio_segments[-1]["end_time"])
+        else:
+            # Fallback to items if segments not available
+            items = data["results"].get("items", [])
+            if items:
+                # Find last item with end_time (excluding punctuation)
+                for item in reversed(items):
+                    if "end_time" in item:
+                        duration = float(item["end_time"])
+                        break
+            else:
+                duration = 0
+        
+        return {
+            "transcript": transcript,
+            "duration": duration
+        }
     except Exception as e:
         raise ValueError(f"Failed to extract transcript from response: {str(e)}")
 
@@ -271,13 +298,23 @@ def lambda_handler(event, context):
         if job_status == "FAILED":
             return {"statusCode": 500, "body": json.dumps({"message": "Transcription failed"})}
 
-        # Download transcript
-        transcript_url = status["TranscriptionJob"]["Transcript"]["TranscriptFileUri"]
-        transcript_text = download_transcript(transcript_url)
+        # Download transcript and get duration
+        transcription_job = status["TranscriptionJob"]
+        transcript_url = transcription_job["Transcript"]["TranscriptFileUri"]
+        
+        # Get transcript data including duration
+        transcript_data = download_transcript(transcript_url)
+        transcript_text = transcript_data["transcript"]
+        duration_seconds = transcript_data["duration"]
+        
+        # Fallback if no duration available
+        # if duration_seconds <= 0:
+        #     word_count = len(transcript_text.split())
+        #     duration_seconds = (word_count / 130.0) * 60  # Estimate using average 130 WPM
+        #     pass
 
         # Analyze transcript
         filler_count = count_filler_words(transcript_text)
-        duration_seconds = 30  # default; could calculate from audio
         pace = calculate_pace(transcript_text, duration_seconds)
         tone = analyze_tone(transcript_text)
 
