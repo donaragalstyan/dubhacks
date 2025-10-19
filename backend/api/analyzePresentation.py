@@ -32,6 +32,66 @@ def analyze_tone(text):
     response = comprehend.detect_sentiment(Text=text, LanguageCode="en")
     return response["Sentiment"]
 
+
+def parse_s3_url(url: str):
+    """Parse common S3 URL formats and return (bucket, key).
+
+    Supported formats:
+    - https://bucket.s3.amazonaws.com/key
+    - https://bucket.s3.region.amazonaws.com/key
+    - https://s3.amazonaws.com/bucket/key
+    - https://s3.region.amazonaws.com/bucket/key
+    - s3://bucket/key
+    - optionally with query string (will be stripped)
+    """
+    # strip query params
+    url_no_q = url.split("?")[0]
+    if url_no_q.startswith("s3://"):
+        rest = url_no_q[len("s3://"):]
+        parts = rest.split("/", 1)
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise ValueError("Invalid s3:// URL format")
+        return parts[0], parts[1]
+
+    # remove scheme
+    if url_no_q.startswith("https://"):
+        host_path = url_no_q[len("https://"):]
+    elif url_no_q.startswith("http://"):
+        host_path = url_no_q[len("http://"):]
+    else:
+        host_path = url_no_q
+
+    # virtual-hosted style: bucket.s3.amazonaws.com/key or bucket.s3.region.amazonaws.com/key
+    if ".s3." in host_path and ".amazonaws.com/" in host_path:
+        # split into host and key
+        host, key = host_path.split(".amazonaws.com/", 1)
+        # host may be bucket.s3 or bucket.s3.region
+        bucket = host.split(".s3")[0]
+        if not bucket or not key:
+            raise ValueError("Invalid virtual-hosted S3 URL")
+        return bucket, key
+
+    # path-style: s3.amazonaws.com/bucket/key or s3.region.amazonaws.com/bucket/key
+    if host_path.startswith("s3.amazonaws.com/") or host_path.startswith("s3.") and ".amazonaws.com/" in host_path:
+        # split after domain
+        parts = host_path.split(".amazonaws.com/", 1)
+        if len(parts) == 2:
+            rest = parts[1]
+        else:
+            # fallback if startswith s3.amazonaws.com/
+            rest = host_path.split("/", 1)[1] if "/" in host_path else ""
+        if not rest:
+            raise ValueError("Invalid path-style S3 URL")
+        segs = rest.split("/", 1)
+        if len(segs) != 2:
+            raise ValueError("Invalid path-style S3 URL: missing object key")
+        bucket, key = segs[0], segs[1]
+        return bucket, key
+
+    # fallback: maybe a simple host/key with bucket.s3.amazonaws.com/key already handled above
+    # If we reach here, we couldn't parse
+    raise ValueError("Unrecognized S3 URL format")
+
 # Main Lambda handler
 def lambda_handler(event, context):
     try:
@@ -40,15 +100,11 @@ def lambda_handler(event, context):
         if not recording_url:
             return {"statusCode": 400, "body": json.dumps({"message": "recordingUrl missing"})}
 
-        # Extract bucket and key from S3 URL
+        # Extract bucket and key from S3 URL (support multiple common formats)
         try:
-            s3_parts = recording_url.replace("https://", "").split(".s3.amazonaws.com/")
-            if len(s3_parts) != 2:
-                return {"statusCode": 400, "body": json.dumps({"message": "Invalid S3 URL format. Expected format: https://bucket-name.s3.amazonaws.com/object-key"})}
-            bucket_name = s3_parts[0]
-            object_key = s3_parts[1]
+            bucket_name, object_key = parse_s3_url(recording_url)
         except Exception as e:
-            return {"statusCode": 400, "body": json.dumps({"message": "Invalid S3 URL format", "error": str(e)})}
+            return {"statusCode": 400, "body": json.dumps({"message": "Invalid S3 URL format. Expected formats: https://bucket.s3.amazonaws.com/key or s3://bucket/key or path-style s3.amazonaws.com/bucket/key", "error": str(e)})}
 
         # Create S3 URI format for Transcribe
         s3_uri = f"s3://{bucket_name}/{object_key}"
@@ -108,7 +164,7 @@ def lambda_handler(event, context):
 if __name__ == "__main__":
     event = {
         "body": json.dumps({
-            "recordingUrl": "https://student-app-recordings-2025.s3.amazonaws.com/presentations/audio.m4a"
+            "recordingUrl": "https://student-app-recordings-2025.s3.us-east-2.amazonaws.com/presentations/test.wav?AWSAccessKeyId=AKIA3HPS6GVVHCU57LXA&Signature=nzfh9KsX12rFVOFXBglHeGclid8%3D&Expires=1760852654"
         })
     }
     result = lambda_handler(event, None)
