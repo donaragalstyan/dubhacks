@@ -59,7 +59,7 @@ async def analyze_presentation(recording_url: str = Body(..., embed=True)) -> Di
             })
         }
         
-        return {"status": "healthy", "service": "speech-analysis-api"}
+        # return {"status": "healthy", "service": "speech-analysis-api"}
         # Call Lambda handler
         result = analyze_presentation_handler(event, None)
         

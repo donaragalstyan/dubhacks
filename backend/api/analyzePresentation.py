@@ -9,18 +9,15 @@ transcribe = boto3.client("transcribe", region_name="us-east-2")  # Transcribe i
 comprehend = boto3.client("comprehend", region_name="us-east-2")  # Tone analysis
 
 # Helper functions
-def generate_presigned_url(bucket_name, object_key, expiry=3600):
-    """Generate presigned URL for S3 object"""
-    return s3.generate_presigned_url(
-        ClientMethod="get_object",
-        Params={"Bucket": bucket_name, "Key": object_key},
-        ExpiresIn=expiry
-    )
-
 def download_transcript(transcript_url):
     response = requests.get(transcript_url)
     data = response.json()
-    return data["results"]["transcripts"][0]["transcript"]
+    try:
+        if not data.get("results") or not data["results"].get("transcripts") or not data["results"]["transcripts"]:
+            raise ValueError("No transcript data found in response")
+        return data["results"]["transcripts"][0]["transcript"]
+    except Exception as e:
+        raise ValueError(f"Failed to extract transcript from response: {str(e)}")
 
 def count_filler_words(text):
     fillers = ["um", "uh", "like", "you know", "so", "actually"]
@@ -44,18 +41,23 @@ def lambda_handler(event, context):
             return {"statusCode": 400, "body": json.dumps({"message": "recordingUrl missing"})}
 
         # Extract bucket and key from S3 URL
-        s3_parts = recording_url.replace("https://", "").split(".s3.amazonaws.com/")
-        bucket_name = s3_parts[0]
-        object_key = s3_parts[1]
+        try:
+            s3_parts = recording_url.replace("https://", "").split(".s3.amazonaws.com/")
+            if len(s3_parts) != 2:
+                return {"statusCode": 400, "body": json.dumps({"message": "Invalid S3 URL format. Expected format: https://bucket-name.s3.amazonaws.com/object-key"})}
+            bucket_name = s3_parts[0]
+            object_key = s3_parts[1]
+        except Exception as e:
+            return {"statusCode": 400, "body": json.dumps({"message": "Invalid S3 URL format", "error": str(e)})}
 
-        # Generate presigned URL (for Transcribe to access your bucket cross-region)
-        presigned_url = generate_presigned_url(bucket_name, object_key)
+        # Create S3 URI format for Transcribe
+        s3_uri = f"s3://{bucket_name}/{object_key}"
 
         # Start Transcribe job
         job_name = f"transcription-{int(time.time())}"
         transcribe.start_transcription_job(
             TranscriptionJobName=job_name,
-            Media={"MediaFileUri": presigned_url},
+            Media={"MediaFileUri": s3_uri},
             MediaFormat=object_key.split(".")[-1],  # mp3, wav, m4a
             LanguageCode="en-US"
         )
