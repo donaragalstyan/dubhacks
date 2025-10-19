@@ -2,6 +2,17 @@ import json
 import boto3
 import time
 import requests
+import re
+from statistics import mean
+import nltk
+from nltk.tokenize import sent_tokenize
+from collections import Counter
+
+# Download required NLTK data
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
 
 # Initialize AWS clients
 s3 = boto3.client("s3", region_name="us-east-2")  # bucket region
@@ -20,17 +31,148 @@ def download_transcript(transcript_url):
         raise ValueError(f"Failed to extract transcript from response: {str(e)}")
 
 def count_filler_words(text):
+    """Return total count and per-filler counts (word boundaries).
+
+    Uses simple whole-word matching to avoid counting substrings.
+    """
     fillers = ["um", "uh", "like", "you know", "so", "actually"]
     text_lower = text.lower()
-    return sum(text_lower.count(word) for word in fillers)
+    counts = {}
+    total = 0
+    for f in fillers:
+        # word boundary match; escape spaces in phrases
+        pattern = r"\\b" + re.escape(f) + r"\\b"
+        c = len(re.findall(pattern, text_lower))
+        counts[f] = c
+        total += c
+    return {"total": total, "per_filler": counts}
 
 def calculate_pace(text, duration_seconds):
     word_count = len(text.split())
+    if duration_seconds and duration_seconds > 0:
+        wpm = (word_count / duration_seconds) * 60
+    else:
+        # fallback estimate: assume average speaking rate 150 wpm
+        # derive duration from word count
+        wpm = 150.0
+        duration_seconds = (word_count / wpm) * 60
     return round((word_count / duration_seconds) * 60, 1)
 
 def analyze_tone(text):
+    # Return both raw sentiment scores and an objective label.
     response = comprehend.detect_sentiment(Text=text, LanguageCode="en")
-    return response["Sentiment"]
+    scores = response.get("SentimentScore", {})
+    # Determine objective/subjective label: if neutral dominates, call it 'objective'
+    neutral = scores.get("Neutral", 0)
+    positive = scores.get("Positive", 0)
+    negative = scores.get("Negative", 0)
+    mixed = scores.get("Mixed", 0)
+
+    # classification avoids value judgment words when neutral is high
+    if neutral >= 0.60:
+        objective_label = "objective"
+    elif max(positive, negative, mixed) - neutral > 0.15:
+        # significantly non-neutral
+        objective_label = "subjective"
+    else:
+        objective_label = "balanced"
+
+    return {"raw": scores, "classification": objective_label}
+
+
+def analyze_clarity(text):
+    """Analyze speech clarity based on sentence structure, length, and vocabulary."""
+    sentences = sent_tokenize(text)
+    
+    # Analyze sentence length (too long = harder to follow)
+    lengths = [len(s.split()) for s in sentences]
+    avg_length = mean(lengths) if lengths else 0
+    
+    # Look for complex sentence markers
+    complex_markers = ["however", "although", "nevertheless", "furthermore", "meanwhile"]
+    complex_count = sum(text.lower().count(m) for m in complex_markers)
+    
+    # Calculate clarity metrics
+    clarity_score = 100
+    if avg_length > 25:  # Penalize very long sentences
+        clarity_score -= min(30, (avg_length - 25) * 2)
+    if complex_count > len(sentences) / 3:  # Penalize excessive complex transitions
+        clarity_score -= min(20, complex_count * 5)
+        
+    # Identify unclear segments
+    unclear_segments = []
+    for s in sentences:
+        if len(s.split()) > 30 or any(m in s.lower() for m in complex_markers):
+            unclear_segments.append(s.strip())
+    
+    return {
+        "score": max(0, min(100, clarity_score)),
+        "avg_sentence_length": round(avg_length, 1),
+        "complex_transition_count": complex_count,
+        "unclear_segments": unclear_segments[:3]  # Top 3 examples
+    }
+
+def analyze_confidence(text, tone_scores):
+    """Analyze speaking confidence based on language patterns and tone."""
+    # Confidence markers (positive) and uncertainty markers (negative)
+    confidence_markers = ["definitely", "certainly", "clearly", "strongly", "confident", "sure"]
+    uncertainty_markers = ["maybe", "perhaps", "kind of", "sort of", "i think", "i guess", "possibly"]
+    
+    text_lower = text.lower()
+    
+    # Count markers
+    confident_count = sum(text_lower.count(m) for m in confidence_markers)
+    uncertain_count = sum(text_lower.count(m) for m in uncertainty_markers)
+    
+    # Calculate base confidence score
+    confidence_score = 100
+    
+    # Adjust for uncertainty markers
+    if uncertain_count > 0:
+        confidence_score -= min(40, uncertain_count * 10)
+    
+    # Boost for confidence markers
+    if confident_count > 0:
+        confidence_score += min(20, confident_count * 5)
+    
+    # Factor in positive/negative tone
+    positive_score = tone_scores.get("Positive", 0)
+    negative_score = tone_scores.get("Negative", 0)
+    confidence_score += (positive_score - negative_score) * 20
+    
+    # Find examples of uncertain phrases
+    uncertain_examples = []
+    sentences = sent_tokenize(text)
+    for s in sentences:
+        s_lower = s.lower()
+        if any(m in s_lower for m in uncertainty_markers):
+            uncertain_examples.append(s.strip())
+            if len(uncertain_examples) >= 3:
+                break
+    
+    return {
+        "score": max(0, min(100, confidence_score)),
+        "confidence_markers": confident_count,
+        "uncertainty_markers": uncertain_count,
+        "uncertain_examples": uncertain_examples
+    }
+
+def find_filler_examples(text, fillers, max_examples=3):
+    """Find examples of sentences containing filler words."""
+    sentences = sent_tokenize(text)
+    examples = []
+    for s in sentences:
+        s_lower = s.lower()
+        for f in fillers:
+            pattern = r"\\b" + re.escape(f) + r"\\b"
+            if re.search(pattern, s_lower):
+                snippet = s.strip()
+                if snippet and snippet not in examples:
+                    examples.append(snippet)
+                break
+        if len(examples) >= max_examples:
+            break
+    return examples
 
 
 def parse_s3_url(url: str):
@@ -134,24 +276,97 @@ def lambda_handler(event, context):
         transcript_text = download_transcript(transcript_url)
 
         # Analyze transcript
-        filler_count = count_filler_words(transcript_text)
-        duration_seconds = 30  # default; could calculate from audio
-        pace = calculate_pace(transcript_text, duration_seconds)
-        tone = analyze_tone(transcript_text)
+        filler_info = count_filler_words(transcript_text)
+        # Accept optional duration from request body (seconds); otherwise estimate
+        duration_seconds = body.get("durationSeconds") or body.get("duration") or None
+        try:
+            duration_seconds = float(duration_seconds) if duration_seconds else None
+        except Exception:
+            duration_seconds = None
 
-        # Suggested exercises
+        # if no duration provided, estimate using 150 wpm average
+        word_count = len(transcript_text.split())
+        if not duration_seconds or duration_seconds <= 0:
+            # estimate duration in seconds from word count and average WPM
+            estimated_wpm = 150.0
+            duration_seconds = (word_count / estimated_wpm) * 60
+
+        pace = calculate_pace(transcript_text, duration_seconds)
+        tone_info = analyze_tone(transcript_text)
+        clarity_info = analyze_clarity(transcript_text)
+        confidence_info = analyze_confidence(transcript_text, tone_info.get("raw", {}))
+
+        # Build precise feedback
+        fillers_list = [f for f, c in filler_info["per_filler"].items() if c > 0]
+        filler_examples = find_filler_examples(transcript_text, fillers_list or ["um", "uh", "like"], max_examples=4)
+
         exercises = []
-        if filler_count > 3:
-            exercises.append("Practice reducing filler words like 'um' and 'uh'.")
-        if pace > 180:
-            exercises.append("Practice slowing down your speech.")
-        if tone.lower() == "negative":
-            exercises.append("Try practicing positive phrasing and tone.")
+        # targeted suggestions
+        if filler_info["total"] > 0:
+            exercises.append({
+                "issue": "filler_words",
+                "total": filler_info["total"],
+                "per_filler": filler_info["per_filler"],
+                "suggestion": "Record short answers and edit out fillers; practice pausing for 1-2 seconds before replying.",
+                "examples": filler_examples,
+            })
+
+        # pacing guidance
+        if pace < 100:
+            exercises.append({"issue": "pace", "wpm": pace, "suggestion": "Try increasing pace slightly and use deliberate phrasing to keep listener engagement."})
+        elif pace > 160:
+            exercises.append({"issue": "pace", "wpm": pace, "suggestion": "Practice speaking at a slower pace; add short pauses after key points and breath exercises."})
+        else:
+            exercises.append({"issue": "pace", "wpm": pace, "suggestion": "Pace is within typical speaking range."})
+
+        # tone guidance uses objective classification
+        exercises.append({
+            "issue": "tone",
+            "classification": tone_info.get("classification"),
+            "raw_scores": tone_info.get("raw"),
+            "suggestion": "Aim for an objective delivery: focus on clear facts, reduce emotionally charged words if you want neutrality." if tone_info.get("classification") != "objective" else "Tone is predominantly objective; keep using factual language."
+        })
+
+        # Add clarity feedback
+        if clarity_info["score"] < 80:
+            exercises.append({
+                "issue": "clarity",
+                "score": clarity_info["score"],
+                "metrics": {
+                    "avg_sentence_length": clarity_info["avg_sentence_length"],
+                    "complex_transitions": clarity_info["complex_transition_count"]
+                },
+                "examples": clarity_info["unclear_segments"],
+                "suggestion": "Try breaking down longer sentences into shorter, clearer statements. Aim for one main idea per sentence."
+            })
+
+        # Add confidence feedback
+        if confidence_info["score"] < 80:
+            exercises.append({
+                "issue": "confidence",
+                "score": confidence_info["score"],
+                "metrics": {
+                    "confidence_markers": confidence_info["confidence_markers"],
+                    "uncertainty_markers": confidence_info["uncertainty_markers"]
+                },
+                "examples": confidence_info["uncertain_examples"],
+                "suggestion": "Replace uncertain phrases ('maybe', 'kind of') with more definitive statements. Practice speaking with authority."
+            })
 
         feedback = {
-            "tone": tone,
+            "tone": tone_info,
             "pace_wpm": pace,
-            "filler_words": filler_count,
+            "word_count": word_count,
+            "estimated_duration_seconds": round(duration_seconds, 1) if duration_seconds else None,
+            "filler_words": filler_info,
+            "clarity": {
+                "score": clarity_info["score"],
+                "details": clarity_info
+            },
+            "confidence": {
+                "score": confidence_info["score"],
+                "details": confidence_info
+            },
             "suggested_exercises": exercises,
             "transcript": transcript_text
         }
