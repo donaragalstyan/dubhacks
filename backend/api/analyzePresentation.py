@@ -164,7 +164,7 @@ def lambda_handler(event, context):
 if __name__ == "__main__":
     event = {
         "body": json.dumps({
-            "recordingUrl": "https://student-app-recordings-2025.s3.us-east-2.amazonaws.com/presentations/test.wav?AWSAccessKeyId=AKIA3HPS6GVVHCU57LXA&Signature=nzfh9KsX12rFVOFXBglHeGclid8%3D&Expires=1760852654"
+            "recordingUrl": "https://student-app-recordings-2025.s3.us-east-2.amazonaws.com/presentations/audio.m4a?AWSAccessKeyId=AKIA3HPS6GVVHCU57LXA&Signature=ZH2aezFDcwulut0QJpsnQf2sAJM%3D&Expires=1760858242"
         })
     }
     result = lambda_handler(event, None)
