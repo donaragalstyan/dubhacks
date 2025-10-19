@@ -150,15 +150,11 @@ if exercise_file:
         with st.spinner("Uploading exercise recording..."):
             # First, upload the file
             files = {"file": (exercise_file.name, exercise_file, "audio/mpeg")}
-            st.write("Uploading file...")  # Debug log
             upload_response = requests.post("http://localhost:8000/api/upload-recording", files=files)
-            st.write(f"Upload response status: {upload_response.status_code}")  # Debug log
             
             if upload_response.status_code == 200:
                 upload_data = upload_response.json()
-                st.write(f"Upload response data: {upload_data}")  # Debug log
                 recording_url = upload_data.get("recordingUrl")
-                st.write(f"Recording URL: {recording_url}")  # Debug log
                 
                 # Then, analyze the exercise
                 with st.spinner(f"Analyzing your {focus_area} exercise..."):
@@ -190,22 +186,19 @@ if exercise_file:
                         "focus_area": focus_area,
                         "constraints": constraints
                     }
-                    st.write(f"Analysis payload: {analysis_payload}")  # Debug log
-                    st.write("Note: Sending request with properly formatted data...")  # Debug log
+               
                     
                     if not recording_url:
                         st.error("No recording URL available")
                         st.stop()
 
                     try:
-                        st.write("Sending analysis request...")  # Debug log
                         analysis_response = requests.post(
                             "http://localhost:8000/api/analyze-exercise",
                             json=analysis_payload,
                             headers={"Content-Type": "application/json"}
                         )
-                        st.write(f"Analysis response status: {analysis_response.status_code}")  # Debug log
-                        st.write(f"Analysis response text: {analysis_response.text}")  # Debug log
+                       
                     except Exception as e:
                         st.error(f"Analysis request failed: {str(e)}")
                         st.stop()

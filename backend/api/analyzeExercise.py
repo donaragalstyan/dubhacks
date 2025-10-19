@@ -165,6 +165,11 @@ def lambda_handler(event, context):
         pace = calculate_pace(transcript_text, duration_seconds)
         tone_info = analyze_tone(transcript_text)
         clarity_info = analyze_clarity(transcript_text)
+
+    # Normalize tone_info to always be a dict
+        if isinstance(tone_info, str):
+            tone_info = {"classification": tone_info, "raw": {}}
+
         confidence_info = analyze_confidence(transcript_text, tone_info.get("raw", {}))
 
         metrics = {
